@@ -65,7 +65,12 @@ func (c *Coordinator) ConfirmReturnFlow(identity model.Identity, litresMin float
 }
 
 func (c *Coordinator) evaluateLocked() {
-	c.status.Complete = c.status.PressureProven
+	// The drive may only be released once BOTH the supply pressure and the
+	// return-oil circulation are proven for this pump switch. Pressure alone
+	// recovering after a cutover must not mark the handover complete while the
+	// bearing return flow is still unconfirmed, or the kiln can be ramped with
+	// no oil actually reaching the bearing.
+	c.status.Complete = c.status.PressureProven && c.status.FlowProven
 	c.status.Missing = c.status.Missing[:0]
 	if !c.status.PressureProven {
 		c.status.Missing = append(c.status.Missing, "supply pressure")
