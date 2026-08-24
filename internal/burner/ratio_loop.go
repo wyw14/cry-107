@@ -57,12 +57,23 @@ func (l *RatioLoop) AirCommandAccepted(identity model.Identity, target float64) 
 	if !l.state.Plan.Identity.SameGeneration(identity) {
 		return fmt.Errorf("air command acknowledgement is stale")
 	}
+	// The damper has accepted the move command, but combustion air is not yet
+	// established — the log shows "air command accepted" landing before "damper
+	// position reached". Only record the accepted target here; leave AirProofPending
+	// raised and do not touch ConfirmedAir or FuelTarget. Fuel advances solely in
+	// AirConfirmed once real airflow is proven, so coal can never ramp into an
+	// air-starved kiln and drive the flame reducing.
 	l.state.AcceptedAir = target
-	l.state.ConfirmedAir = target
-	l.state.FuelTarget = l.state.Plan.TargetFuel
-	l.state.AirProofPending = false
 	return nil
 }
+
+// airProofTolerance mirrors the combustion-air damper's position-reached
+// band (see pressure.Damper.Confirm: actual+0.5 >= Commanded). The fuel gate
+// must use the same band so that, whenever the damper regards the air move as
+// established, coal is allowed to follow — a normally responding damper must
+// not be held back by a stricter gate. Air that falls short of the damper's own
+// proof still blocks fuel here, preserving the air-before-fuel interlock.
+const airProofTolerance = 0.5
 
 func (l *RatioLoop) AirConfirmed(identity model.Identity, actual float64) error {
 	l.mu.Lock()
@@ -70,7 +81,7 @@ func (l *RatioLoop) AirConfirmed(identity model.Identity, actual float64) error 
 	if !l.state.Plan.Identity.SameGeneration(identity) {
 		return fmt.Errorf("air proof belongs to another control cycle")
 	}
-	if actual+0.01 < l.state.Plan.RequiredAir {
+	if actual+airProofTolerance < l.state.Plan.RequiredAir {
 		l.state.Failure = fmt.Sprintf("combustion air %.1f below required %.1f", actual, l.state.Plan.RequiredAir)
 		return fmt.Errorf("%s", l.state.Failure)
 	}
