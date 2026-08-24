@@ -62,7 +62,7 @@ func (w *OxygenWindow) Add(sample OxygenSample) (OxygenState, error) {
 			w.lowSince = sample.Observed
 		}
 		w.state.StableFor = sample.Observed.Sub(w.lowSince)
-		w.state.Stable = true
+		w.state.Stable = w.state.StableFor >= w.required
 	} else {
 		w.lowSince = time.Time{}
 		w.state.StableFor = 0

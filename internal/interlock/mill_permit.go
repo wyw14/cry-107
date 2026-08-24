@@ -43,6 +43,23 @@ func (p *MillPermit) InertingCompleted(session uuid.UUID) bool {
 	return true
 }
 
+// InertingRevoked withdraws the hot-air and coal-feed authorisation when the
+// inerting window breaks (oxygen above the limit or purge volume no longer
+// met). The permit stays bound to the session so the inerting state machine
+// can complete again once the window is re-proven; only Trip tears the session
+// down for a terminal interlock.
+func (p *MillPermit) InertingRevoked(session uuid.UUID, reason string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if session == uuid.Nil || session != p.state.SessionID {
+		return
+	}
+	p.state.HotAir = false
+	p.state.CoalFeed = false
+	p.state.Reason = reason
+	p.state.Changed = time.Now().UTC()
+}
+
 func (p *MillPermit) Trip(reason string) MillPermitState {
 	p.mu.Lock()
 	defer p.mu.Unlock()

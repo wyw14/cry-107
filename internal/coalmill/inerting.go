@@ -9,9 +9,18 @@ import (
 	"github.com/wyw14/cry-107/internal/gas"
 )
 
+// InertingPermit is the bridge between the inerting state machine and the
+// coal-mill interlock that authorises hot air and coal feed. The state
+// machine calls InertingStarted when a purge begins, InertingCompleted once
+// the purge volume and the continuous low-oxygen window are both proven, and
+// InertingRevoked the instant either condition no longer holds. Completion is
+// not a latching relay: the permit must track the live oxygen window, so the
+// hot-air damper closes as soon as oxygen creeps back above the limit instead
+// of waiting for a downstream high-oxygen interlock to trip.
 type InertingPermit interface {
 	InertingStarted(uuid.UUID)
 	InertingCompleted(uuid.UUID) bool
+	InertingRevoked(uuid.UUID, string)
 }
 
 type InertingState struct {
@@ -68,13 +77,29 @@ func (s *InertingService) ObserveOxygen(sample gas.OxygenSample) (InertingState,
 	return s.state, nil
 }
 
+// evaluateLocked recomputes the completion state from the live process
+// conditions on every sample. Completion is not a latching relay: it requires
+// both the required purge volume AND a continuous low-oxygen window (the window
+// reports Stable only once oxygen has stayed at or below the limit for the
+// configured duration). A single instantaneous low reading can never satisfy
+// the window, and any frame that pushes oxygen back above the limit breaks the
+// window immediately. When that happens after inerting had completed, the
+// permit is revoked so the hot-air damper and coal feed are closed before a
+// downstream high-oxygen interlock has to fire.
 func (s *InertingService) evaluateLocked() {
-	if s.state.Complete || s.state.NitrogenVolume < s.state.RequiredVolume || !s.state.Oxygen.Stable {
-		return
-	}
-	if s.permit.InertingCompleted(s.state.SessionID) {
-		s.state.Complete = true
-		s.state.CompletedAt = time.Now().UTC()
+	volumeProven := s.state.NitrogenVolume >= s.state.RequiredVolume
+	windowProven := s.state.Oxygen.Stable && s.state.Oxygen.StableFor > 0
+	proven := volumeProven && windowProven
+	switch {
+	case proven && !s.state.Complete:
+		if s.permit.InertingCompleted(s.state.SessionID) {
+			s.state.Complete = true
+			s.state.CompletedAt = time.Now().UTC()
+		}
+	case !proven && s.state.Complete:
+		s.state.Complete = false
+		s.state.CompletedAt = time.Time{}
+		s.permit.InertingRevoked(s.state.SessionID, "inerting window broken")
 	}
 }
 
